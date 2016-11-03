@@ -4,7 +4,7 @@
 
 import Path from 'path'
 import { create } from 'process-communication'
-import { FindCache } from 'atom-linter'
+import { FindCache, findCached } from 'atom-linter'
 import * as Helpers from './worker-helpers'
 
 process.title = 'linter-eslint helper'
@@ -41,7 +41,7 @@ function fixJob(argv, eslint) {
   }
 }
 
-create().onRequest('job', ({ contents, type, config, filePath, rules }, job) => {
+create().onRequest('job', ({ contents, type, config, filePath, projectPath, rules }, job) => {
   global.__LINTER_ESLINT_RESPONSE = []
 
   if (config.disableFSCache) {
@@ -49,7 +49,7 @@ create().onRequest('job', ({ contents, type, config, filePath, rules }, job) => 
   }
 
   const fileDir = Path.dirname(filePath)
-  const eslint = Helpers.getESLintInstance(fileDir, config)
+  const eslint = Helpers.getESLintInstance(fileDir, config, projectPath)
   const configPath = Helpers.getConfigPath(fileDir)
   const relativeFilePath = Helpers.getRelativePath(fileDir, filePath, config)
 
@@ -59,6 +59,9 @@ create().onRequest('job', ({ contents, type, config, filePath, rules }, job) => 
     job.response = lintJob(argv, contents, eslint, configPath, config)
   } else if (type === 'fix') {
     job.response = fixJob(argv, eslint)
+  } else if (type === 'debug') {
+    const modulesDir = Path.dirname(findCached(fileDir, 'node_modules/eslint') || '')
+    job.response = Helpers.findESLintDirectory(modulesDir, config)
   }
 })
 

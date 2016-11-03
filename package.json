@@ -1,7 +1,7 @@
 {
   "name": "linter-eslint",
   "main": "./lib/main",
-  "version": "7.3.2",
+  "version": "8.0.0",
   "description": "Lint JavaScript on the fly, using ESLint",
   "repository": "https://github.com/AtomLinter/linter-eslint.git",
   "license": "MIT",
@@ -40,6 +40,12 @@
     "globalNodePath": {
       "title": "Global Node Installation Path",
       "description": "Write the value of `npm get prefix` here",
+      "type": "string",
+      "default": ""
+    },
+    "advancedLocalNodeModules": {
+      "title": "Path to the local node_modules folder",
+      "description": "Optionally specify the path to the local node_modules folder",
       "type": "string",
       "default": ""
     },

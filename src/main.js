@@ -1,12 +1,13 @@
 'use babel'
 
+import Path from 'path'
 import escapeHTML from 'escape-html'
 import ruleURI from 'eslint-rule-documentation'
 
 // eslint-disable-next-line import/no-extraneous-dependencies, import/extensions
 import { CompositeDisposable, Range } from 'atom'
 
-import { spawnWorker, showError, idsToIgnoredRules } from './helpers'
+import { spawnWorker, showError, idsToIgnoredRules, validatePoint } from './helpers'
 
 // Configuration
 const scopes = []
@@ -45,10 +46,14 @@ module.exports = {
       editor.onDidSave(() => {
         if (scopes.indexOf(editor.getGrammar().scopeName) !== -1 &&
             atom.config.get('linter-eslint.fixOnSave')) {
+          const filePath = editor.getPath()
+          const projectPath = atom.project.relativizePath(filePath)[0]
+
           this.worker.request('job', {
             type: 'fix',
             config: atom.config.get('linter-eslint'),
-            filePath: editor.getPath()
+            filePath,
+            projectPath
           }).catch(response =>
             atom.notifications.addWarning(response)
           )
@@ -57,9 +62,42 @@ module.exports = {
     }))
 
     this.subscriptions.add(atom.commands.add('atom-text-editor', {
+      'linter-eslint:debug': () => {
+        const textEditor = atom.workspace.getActiveTextEditor()
+        const filePath = textEditor.getPath()
+        // eslint-disable-next-line import/no-dynamic-require
+        const linterEslintMeta = require(Path.join(atom.packages.resolvePackagePath('linter-eslint'), 'package.json'))
+        const config = atom.config.get('linter-eslint')
+        const configString = JSON.stringify(config, null, 2)
+        const hoursSinceRestart = process.uptime() / 3600
+        this.worker.request('job', {
+          type: 'debug',
+          config,
+          filePath
+        }).then((response) => {
+          const detail = [
+            `atom version: ${atom.getVersion()}`,
+            `linter-eslint version: ${linterEslintMeta.version}`,
+            // eslint-disable-next-line import/no-dynamic-require
+            `eslint version: ${require(Path.join(response.path, 'package.json')).version}`,
+            `hours since last atom restart: ${Math.round(hoursSinceRestart * 10) / 10}`,
+            `platform: ${process.platform}`,
+            `Using ${response.type} eslint from ${response.path}`,
+            `linter-eslint configuration: ${configString}`
+          ].join('\n')
+          const notificationOptions = { detail, dismissable: true }
+          atom.notifications.addInfo('linter-eslint debugging information', notificationOptions)
+        }).catch((response) => {
+          atom.notifications.addError(`${response}`)
+        })
+      }
+    }))
+
+    this.subscriptions.add(atom.commands.add('atom-text-editor', {
       'linter-eslint:fix-file': () => {
         const textEditor = atom.workspace.getActiveTextEditor()
         const filePath = textEditor.getPath()
+        const projectPath = atom.project.relativizePath(filePath)[0]
 
         if (!textEditor || textEditor.isModified()) {
           // Abort for invalid or unsaved text editors
@@ -70,7 +108,8 @@ module.exports = {
         this.worker.request('job', {
           type: 'fix',
           config: atom.config.get('linter-eslint'),
-          filePath
+          filePath,
+          projectPath
         }).then(response =>
           atom.notifications.addSuccess(response)
         ).catch(response =>
@@ -128,11 +167,12 @@ module.exports = {
         }
 
         return this.worker.request('job', {
-          contents: text,
           type: 'lint',
+          contents: text,
           config: atom.config.get('linter-eslint'),
           rules,
-          filePath
+          filePath,
+          projectPath: atom.project.relativizePath(filePath)[0] || ''
         }).then((response) => {
           if (textEditor.getText() !== text) {
             /*
@@ -143,7 +183,9 @@ module.exports = {
              */
             return null
           }
-          return response.map(({ message, line, severity, ruleId, column, fix }) => {
+          return response.map(({
+            message, line, severity, ruleId, column, fix, endLine, endColumn }
+          ) => {
             const textBuffer = textEditor.getBuffer()
             let linterFix = null
             if (fix) {
@@ -157,10 +199,20 @@ module.exports = {
               }
             }
             let range
+            const msgLine = line - 1
             try {
-              range = Helpers.rangeFromLineNumber(
-                textEditor, line - 1, column ? column - 1 : column
-              )
+              if (typeof endColumn !== 'undefined' && typeof endLine !== 'undefined') {
+                // Here we always want the column to be a number
+                const msgCol = Math.max(0, column - 1)
+                validatePoint(textEditor, msgLine, msgCol)
+                validatePoint(textEditor, endLine - 1, endColumn - 1)
+                range = [[msgLine, msgCol], [endLine - 1, endColumn - 1]]
+              } else {
+                // We want msgCol to remain undefined if it was initially so
+                // `rangeFromLineNumber` will give us a range over the entire line
+                const msgCol = typeof column !== 'undefined' ? column - 1 : column
+                range = Helpers.rangeFromLineNumber(textEditor, msgLine, msgCol)
+              }
             } catch (err) {
               throw new Error(
                 `Cannot mark location in editor for (${ruleId}) - (${message})` +
